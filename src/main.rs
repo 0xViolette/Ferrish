@@ -1,14 +1,34 @@
-use std::io::{self, Write};
+use std::{
+    io::{self, Write},
+    process::exit,
+};
 
-struct ParsedInput<'a> {
-    command: &'a str,
-    options: Option<Vec<&'a str>>,
+enum Command<'a> {
+    Exit,
+    External(&'a str),
 }
 
-fn parse_input<'a>(input: &'a str) -> ParsedInput<'a> {
+struct ParsedInput<'a> {
+    command: Command<'a>,
+    options: Vec<&'a str>,
+}
+
+fn parse_input(input: &str) -> ParsedInput<'_> {
+    let command = match input.trim_end() {
+        "exit" => Command::Exit,
+        invalid => Command::External(invalid),
+    };
+
     ParsedInput {
-        command: input.trim_end(),
-        options: None,
+        command,
+        options: vec![],
+    }
+}
+
+fn run(input: ParsedInput) {
+    match input.command {
+        Command::External(name) => println!("{name}: command not found"),
+        Command::Exit => exit(0),
     }
 }
 
@@ -23,7 +43,6 @@ fn main() {
             .expect("Could not read the command");
 
         let parsed_input = parse_input(&input.as_str());
-
-        println!("{}: command not found", parsed_input.command);
+        run(parsed_input);
     }
 }
