@@ -1,4 +1,3 @@
-#[allow(unused_imports)]
 use std::io::{self, Write};
 
 struct ParsedInput<'a> {
@@ -14,15 +13,17 @@ fn parse_input<'a>(input: &'a str) -> ParsedInput<'a> {
 }
 
 fn main() {
-    print!("$ ");
-    io::stdout().flush().unwrap();
+    loop {
+        print!("$ ");
+        io::stdout().flush().unwrap();
 
-    let mut input = String::new();
-    io::stdin()
-        .read_line(&mut input)
-        .expect("Could not read the command");
+        let mut input = String::new();
+        io::stdin()
+            .read_line(&mut input)
+            .expect("Could not read the command");
 
-    let parsed_input = parse_input(&input.as_str());
+        let parsed_input = parse_input(&input.as_str());
 
-    println!("{}: command not found", parsed_input.command);
+        println!("{}: command not found", parsed_input.command);
+    }
 }
