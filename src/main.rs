@@ -5,30 +5,50 @@ use std::{
 
 enum Command<'a> {
     Exit,
-    External(&'a str),
+    Empty,
+    Echo,
+    Invalid(&'a str),
 }
 
 struct ParsedInput<'a> {
     command: Command<'a>,
-    options: Vec<&'a str>,
+    arguments: Vec<&'a str>,
 }
 
-fn parse_input(input: &str) -> ParsedInput<'_> {
-    let command = match input.trim_end() {
-        "exit" => Command::Exit,
-        invalid => Command::External(invalid),
+fn parse(input: &str) -> ParsedInput<'_> {
+    // let command = match input.trim_end() {
+    //     "exit" => Command::Exit,
+    //     "" => Command::Empty,
+    //     invalid => Command::Invalid(invalid),
+    // };
+
+    let mut parts = input.trim_end().split_whitespace();
+    let command_string = parts.next();
+    let args_vector: Vec<&'_ str> = parts.collect();
+
+    let command = match command_string {
+        Some("exit") => Command::Exit,
+        Some("echo") => Command::Echo,
+        None => Command::Empty,
+        _ => Command::Invalid(command_string.unwrap()),
     };
 
     ParsedInput {
         command,
-        options: vec![],
+        arguments: args_vector,
     }
+}
+
+fn handle_echo<'a>(arguments: Vec<&'_ str>) {
+    println!("{}", arguments.join(" "));
 }
 
 fn run(input: ParsedInput) {
     match input.command {
-        Command::External(name) => println!("{name}: command not found"),
+        Command::Invalid(name) => println!("{name}: command not found"),
+        Command::Empty => {}
         Command::Exit => exit(0),
+        Command::Echo => handle_echo(input.arguments),
     }
 }
 
@@ -38,11 +58,13 @@ fn main() {
         io::stdout().flush().unwrap();
 
         let mut input = String::new();
-        io::stdin()
-            .read_line(&mut input)
-            .expect("Could not read the command");
+        // `unwrap_or(0)` == 0 when Ctrl+D (EOF signal) or there was some error in reading the
+        // input
+        if io::stdin().read_line(&mut input).unwrap_or(0) == 0 {
+            break;
+        }
 
-        let parsed_input = parse_input(&input.as_str());
+        let parsed_input = parse(&input.as_str());
         run(parsed_input);
     }
 }
