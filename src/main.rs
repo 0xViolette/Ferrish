@@ -7,6 +7,7 @@ enum Command<'a> {
     Exit,
     Empty,
     Echo,
+    Type,
     Invalid(&'a str),
 }
 
@@ -15,32 +16,43 @@ struct ParsedInput<'a> {
     arguments: Vec<&'a str>,
 }
 
+fn parse_command(s: &str) -> Command<'_> {
+    match s {
+        "exit" => Command::Exit,
+        "echo" => Command::Echo,
+        "type" => Command::Type,
+        _ => Command::Invalid(s),
+    }
+}
+
 fn parse(input: &str) -> ParsedInput<'_> {
-    // let command = match input.trim_end() {
-    //     "exit" => Command::Exit,
-    //     "" => Command::Empty,
-    //     invalid => Command::Invalid(invalid),
-    // };
-
     let mut parts = input.trim_end().split_whitespace();
-    let command_string = parts.next();
-    let args_vector: Vec<&'_ str> = parts.collect();
 
-    let command = match command_string {
-        Some("exit") => Command::Exit,
-        Some("echo") => Command::Echo,
+    let command = match parts.next() {
+        Some(s) => parse_command(s),
         None => Command::Empty,
-        _ => Command::Invalid(command_string.unwrap()),
     };
 
     ParsedInput {
         command,
-        arguments: args_vector,
+        arguments: parts.collect(),
     }
 }
 
 fn handle_echo<'a>(arguments: Vec<&'_ str>) {
     println!("{}", arguments.join(" "));
+}
+
+fn handle_type<'a>(arguments: Vec<&'_ str>) {
+    for arg in arguments.iter() {
+        match parse_command(arg) {
+            Command::Exit | Command::Type | Command::Echo => {
+                println!("{arg} is a shell builtin");
+            }
+            Command::Invalid(_) => println!("{arg}: not found"),
+            Command::Empty => {}
+        }
+    }
 }
 
 fn run(input: ParsedInput) {
@@ -49,6 +61,7 @@ fn run(input: ParsedInput) {
         Command::Empty => {}
         Command::Exit => exit(0),
         Command::Echo => handle_echo(input.arguments),
+        Command::Type => handle_type(input.arguments),
     }
 }
 
