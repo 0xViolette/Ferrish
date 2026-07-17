@@ -1,13 +1,18 @@
 use std::{
+    env,
     io::{self, Write},
+    path::PathBuf,
     process::exit,
 };
+
+use is_executable;
 
 enum Command<'a> {
     Exit,
     Empty,
     Echo,
     Type,
+    Executable(PathBuf),
     Invalid(&'a str),
 }
 
@@ -16,12 +21,33 @@ struct ParsedInput<'a> {
     arguments: Vec<&'a str>,
 }
 
+fn check_executable(s: &str) -> Option<PathBuf> {
+    let path = env::var_os("PATH").expect("PATH not set");
+
+    for dir in env::split_paths(&path) {
+        let base_path = dir.as_path();
+
+        let full_path = base_path.join(s);
+        if is_executable::is_executable(&full_path) {
+            return Some(full_path);
+        }
+    }
+
+    None
+}
+
 fn parse_command(s: &str) -> Command<'_> {
     match s {
         "exit" => Command::Exit,
         "echo" => Command::Echo,
         "type" => Command::Type,
-        _ => Command::Invalid(s),
+        _ => {
+            if let Some(full_path) = check_executable(s) {
+                Command::Executable(full_path)
+            } else {
+                Command::Invalid(s)
+            }
+        }
     }
 }
 
@@ -50,6 +76,7 @@ fn handle_type<'a>(arguments: Vec<&'_ str>) {
                 println!("{arg} is a shell builtin");
             }
             Command::Invalid(_) => println!("{arg}: not found"),
+            Command::Executable(path) => println!("{arg} is {}", path.display()),
             Command::Empty => {}
         }
     }
@@ -62,6 +89,7 @@ fn run(input: ParsedInput) {
         Command::Exit => exit(0),
         Command::Echo => handle_echo(input.arguments),
         Command::Type => handle_type(input.arguments),
+        Command::Executable(_) => {}
     }
 }
 
