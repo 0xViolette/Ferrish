@@ -1,7 +1,7 @@
 use std::{
     env,
     io::{self, Write},
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::exit,
 };
 
@@ -77,10 +77,9 @@ fn handle_type(arguments: Vec<&str>) {
 }
 
 fn handle_executable(executable_path: &PathBuf, args: Vec<&str>) {
-    let mut exec = std::process::Command::new(executable_path);
+    let mut exec = std::process::Command::new(executable_path.file_name().unwrap());
     exec.args(args);
     exec.status().expect("process failed to execute");
-    println!();
 }
 
 fn run(input: ParsedInput) {
