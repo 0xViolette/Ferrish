@@ -1,8 +1,8 @@
 use std::{
     env,
     io::{self, Write},
-    path::PathBuf,
-    process::exit,
+    path::{Path, PathBuf},
+    process,
 };
 
 use is_executable;
@@ -76,18 +76,19 @@ fn handle_type(arguments: Vec<&str>) {
     }
 }
 
-fn handle_executable(executable_path: &PathBuf, args: Vec<&str>) {
-    let mut exec = std::process::Command::new(executable_path.file_name().unwrap());
-    exec.args(args);
-    exec.status().expect("process failed to execute");
+fn handle_executable(executable_path: &Path, args: &[&str]) {
+    process::Command::new(executable_path.file_name().unwrap())
+        .args(args)
+        .status()
+        .expect("process failed to execute");
 }
 
 fn run(input: ParsedInput) {
     match input.command {
-        Command::Exit => exit(0),
+        Command::Exit => process::exit(0),
         Command::Echo => handle_echo(input.arguments),
         Command::Type => handle_type(input.arguments),
-        Command::Executable(cmd) => handle_executable(&cmd, input.arguments),
+        Command::Executable(cmd) => handle_executable(&cmd, &input.arguments),
     }
 }
 
