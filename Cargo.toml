@@ -1,12 +1,14 @@
 [package]
 name = "ferrish"
 version = "0.1.0"
-authors = ["0xViolette <arjitsystem03@gmail.com>"]
-edition = "2024"
-rust-version = "1.96"
+authors = ["0xViolette"]
+edition = "2021"
+description = "A minimal Unix shell written in Rust - built from scratch."
+readme = "README.md"
+repository = "https://github.com/0xViolette/Ferrish"
+license = "MIT"
+keywords = ["shell", "cli", "repl", "unix"]
+categories = ["command-line-utilities"]
 
 [dependencies]
-anyhow = "1.0.68"
-bytes = "1.3.0"
 is_executable = "1.0.6"
-thiserror = "1.0.38"

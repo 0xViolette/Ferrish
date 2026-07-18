@@ -2,12 +2,19 @@
 debug/
 target/
 
-# Backup files
-**/*.rs.bk
-
-# Debug info
+# Rust
 *.pdb
+*.bk
 
-# Scratch files
-temp
-temp.rs
+# macOS
+.DS_Store
+
+# Editor
+*.swp
+*~
+
+# Environment & secrets
+.env
+
+# Logs
+*.log
