@@ -1,5 +1,5 @@
 use std::{
-    env, error,
+    env,
     io::{self, Write},
     path::{Path, PathBuf},
     process,
@@ -7,14 +7,11 @@ use std::{
 
 use is_executable;
 
-enum ParseError {
-    CommandNotFound(String),
-}
-
 enum Command {
     Exit,
     Echo,
     Pwd,
+    Cd,
     Type,
     Executable(PathBuf),
 }
@@ -38,6 +35,7 @@ fn parse_command(s: &str) -> Option<Command> {
         "echo" => Some(Command::Echo),
         "type" => Some(Command::Type),
         "pwd" => Some(Command::Pwd),
+        "cd" => Some(Command::Cd),
         _ => {
             if let Some(full_path) = check_executable(s) {
                 Some(Command::Executable(full_path))
@@ -48,12 +46,12 @@ fn parse_command(s: &str) -> Option<Command> {
     }
 }
 
-fn parse(input: &str) -> Result<ParsedInput<'_>, ParseError> {
+fn parse(input: &str) -> Result<ParsedInput<'_>, String> {
     let mut parts = input.split_whitespace();
     let cmd_string = parts.next().unwrap();
 
     let command = parse_command(cmd_string)
-        .ok_or_else(|| ParseError::CommandNotFound(cmd_string.to_string()))?;
+        .ok_or_else(|| format!("{cmd_string}: command not found").to_string())?;
 
     Ok(ParsedInput {
         command,
@@ -85,12 +83,27 @@ fn handle_executable(executable_path: &Path, args: &[&str]) {
         .expect("process failed to execute");
 }
 
+fn handle_cd(args: &[&str]) -> Result<(), String> {
+    match args {
+        [] | ["~"] => std::env::home_dir()
+            .ok_or_else(|| "Cannot find your home directory".to_string())
+            .and_then(|home| std::env::set_current_dir(home).map_err(|e| e.to_string())),
+        [dir] => std::env::set_current_dir(dir).map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => format!("cd: {dir}: No such file or directory"),
+            std::io::ErrorKind::PermissionDenied => format!("cd: {dir}: Permission denied"),
+            _ => format!("cd: {dir}: {}", e.to_string()),
+        }),
+        [_, _, ..] => Err("cd: too many arguments".to_string()),
+    }
+}
+
 fn run(input: ParsedInput) {
     match input.command {
         Command::Exit => process::exit(0),
         Command::Echo => handle_echo(input.arguments),
         Command::Type => handle_type(input.arguments),
         Command::Pwd => println!("{}", std::env::current_dir().unwrap().display()),
+        Command::Cd => handle_cd(&input.arguments).unwrap_or_else(|e| eprintln!("{e}")),
         Command::Executable(cmd) => handle_executable(&cmd, &input.arguments),
     }
 }
@@ -112,8 +125,8 @@ fn main() {
 
         match parse(&input) {
             Ok(parsed) => run(parsed),
-            Err(ParseError::CommandNotFound(cmd)) => {
-                println!("{cmd}: command not found");
+            Err(e) => {
+                eprintln!("{e}")
             }
         }
     }
