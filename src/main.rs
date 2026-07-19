@@ -1,5 +1,5 @@
 use std::{
-    env,
+    env, error,
     io::{self, Write},
     path::{Path, PathBuf},
     process,
@@ -14,6 +14,7 @@ enum ParseError {
 enum Command {
     Exit,
     Echo,
+    Pwd,
     Type,
     Executable(PathBuf),
 }
@@ -36,6 +37,7 @@ fn parse_command(s: &str) -> Option<Command> {
         "exit" => Some(Command::Exit),
         "echo" => Some(Command::Echo),
         "type" => Some(Command::Type),
+        "pwd" => Some(Command::Pwd),
         _ => {
             if let Some(full_path) = check_executable(s) {
                 Some(Command::Executable(full_path))
@@ -88,6 +90,7 @@ fn run(input: ParsedInput) {
         Command::Exit => process::exit(0),
         Command::Echo => handle_echo(input.arguments),
         Command::Type => handle_type(input.arguments),
+        Command::Pwd => println!("{}", std::env::current_dir().unwrap().display()),
         Command::Executable(cmd) => handle_executable(&cmd, &input.arguments),
     }
 }
