@@ -5,6 +5,7 @@ use std::{
     process,
 };
 
+use crossterm;
 use is_executable;
 
 enum Command {
@@ -108,26 +109,121 @@ fn run(input: ParsedInput) {
     }
 }
 
-fn main() {
-    loop {
-        print!("$ ");
-        io::stdout().flush().unwrap();
+fn get_current_dir_children() -> std::io::Result<Vec<String>> {
+    let files = std::fs::read_dir("./")?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter_map(|path| {
+            path.file_name()
+                .and_then(|os_str| os_str.to_str())
+                .map(|s| s.to_string().to_lowercase())
+        })
+        .collect();
 
-        let mut input = String::new();
-        // `unwrap_or(0)` == 0 when Ctrl+D (EOF signal) or there was some error in reading the
-        // input
-        if io::stdin().read_line(&mut input).unwrap_or(0) == 0 {
-            break;
-        }
-        if input.trim().is_empty() {
+    Ok(files)
+}
+
+fn read_loop() -> std::io::Result<()> {
+    let mut line_buffer = String::new();
+
+    while let Ok(event) = crossterm::event::read() {
+        let Some(event) = event.as_key_press_event() else {
             continue;
-        }
+        };
 
-        match parse(&input) {
-            Ok(parsed) => run(parsed),
-            Err(e) => {
-                eprintln!("{e}")
+        // 1. Check for Exit Commands (Ctrl+C / Ctrl+D)
+        if event
+            .modifiers
+            .contains(crossterm::event::KeyModifiers::CONTROL)
+        {
+            if event.code == crossterm::event::KeyCode::Char('c')
+                || event.code == crossterm::event::KeyCode::Char('d')
+            {
+                break;
             }
         }
+
+        // 2. The Bulletproof Enter Check
+        // Different environments send Enter differently in raw mode (\n, \r, or Ctrl+J/M)
+        let is_enter = match event.code {
+            crossterm::event::KeyCode::Enter => true,
+            crossterm::event::KeyCode::Char('\n') | crossterm::event::KeyCode::Char('\r') => true,
+            crossterm::event::KeyCode::Char('j') | crossterm::event::KeyCode::Char('m')
+                if event
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                true
+            }
+            _ => false,
+        };
+
+        if is_enter {
+            crossterm::terminal::disable_raw_mode()?;
+            println!(); // Move cursor to the next line
+
+            if !line_buffer.trim().is_empty() {
+                match parse(&line_buffer) {
+                    Ok(parsed) => run(parsed),
+                    Err(e) => {
+                        eprintln!("{e}");
+                    }
+                }
+            }
+
+            crossterm::terminal::enable_raw_mode()?;
+            print!("\r$ ");
+            io::stdout().flush()?;
+            line_buffer.clear();
+            continue; // Command executed, skip to the next loop iteration
+        }
+
+        match event.code {
+            crossterm::event::KeyCode::Tab => {
+                io::stdout().flush()?;
+                if let Ok(file_names) = get_current_dir_children() {
+                    if let Some(matched) = file_names.iter().find(|s| {
+                        s.starts_with(&line_buffer.split_whitespace().last().unwrap_or(""))
+                    }) {
+                        let remainder = matched
+                            .strip_prefix(&line_buffer.split_whitespace().last().unwrap_or(""))
+                            .unwrap_or("");
+                        print!("{} ", remainder);
+                        line_buffer += remainder;
+                        line_buffer += " ";
+                        io::stdout().flush()?;
+                    }
+                }
+            }
+            crossterm::event::KeyCode::Backspace => {
+                if !line_buffer.is_empty() {
+                    line_buffer.pop();
+                    print!("\x08 \x08");
+                    io::stdout().flush()?;
+                }
+            }
+            crossterm::event::KeyCode::Char(c) => {
+                if !event
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL)
+                {
+                    line_buffer.push(c);
+                    print!("{c}");
+                    io::stdout().flush()?;
+                }
+            }
+            _ => {}
+        }
     }
+
+    Ok(())
+}
+
+fn main() -> io::Result<()> {
+    crossterm::terminal::enable_raw_mode()?;
+    print!("$ ");
+    io::stdout().flush()?;
+    read_loop()?;
+    crossterm::terminal::disable_raw_mode()?;
+    Ok(())
 }

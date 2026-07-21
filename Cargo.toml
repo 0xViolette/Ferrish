@@ -11,4 +11,5 @@ keywords = ["shell", "cli", "repl", "unix"]
 categories = ["command-line-utilities"]
 
 [dependencies]
+crossterm = "0.29.0"
 is_executable = "1.0.6"
