@@ -22,6 +22,30 @@ struct ParsedInput<'a> {
     arguments: Vec<&'a str>,
 }
 
+fn check_prefix(v: &Vec<&str>, p: &str) -> bool {
+    v.iter().all(|s| s.starts_with(p))
+}
+
+fn longest_common_prefix(v: &Vec<&str>) -> String {
+    let mut pivot = String::new();
+    for c in v[0].chars() {
+        if !check_prefix(v, &pivot) {
+            let mut ret = pivot.to_string();
+            ret.pop();
+            return ret;
+        } else {
+            pivot += &format!("{c}");
+        }
+    }
+    if !check_prefix(v, &pivot) {
+        let mut ret = pivot.to_string();
+        ret.pop();
+        return ret;
+    } else {
+        pivot.to_string()
+    }
+}
+
 fn check_executable(s: &str) -> Option<PathBuf> {
     let path = env::var_os("PATH").expect("PATH not set");
 
@@ -109,14 +133,25 @@ fn run(input: ParsedInput) {
     }
 }
 
-fn get_current_dir_children() -> std::io::Result<Vec<String>> {
-    let files = std::fs::read_dir("./")?
+fn get_dir_children(path: &Path) -> std::io::Result<Vec<String>> {
+    let absolute_path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let files = std::fs::read_dir(absolute_path)?
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
         .filter_map(|path| {
-            path.file_name()
-                .and_then(|os_str| os_str.to_str())
-                .map(|s| s.to_string().to_lowercase())
+            if path.is_file() {
+                path.file_name()
+                    .and_then(|os_str| os_str.to_str())
+                    .map(|s| s.to_string().to_lowercase() + " ")
+            } else {
+                path.file_name()
+                    .and_then(|os_str| os_str.to_str())
+                    .map(|s| s.to_string().to_lowercase() + "/")
+            }
         })
         .collect();
 
@@ -125,6 +160,7 @@ fn get_current_dir_children() -> std::io::Result<Vec<String>> {
 
 fn read_loop() -> std::io::Result<()> {
     let mut line_buffer = String::new();
+    let mut tab_count = 0;
 
     while let Ok(event) = crossterm::event::read() {
         let Some(event) = event.as_key_press_event() else {
@@ -175,23 +211,72 @@ fn read_loop() -> std::io::Result<()> {
             print!("\r$ ");
             io::stdout().flush()?;
             line_buffer.clear();
-            continue; // Command executed, skip to the next loop iteration
+            continue;
         }
 
         match event.code {
             crossterm::event::KeyCode::Tab => {
-                io::stdout().flush()?;
-                if let Ok(file_names) = get_current_dir_children() {
-                    if let Some(matched) = file_names.iter().find(|s| {
-                        s.starts_with(&line_buffer.split_whitespace().last().unwrap_or(""))
-                    }) {
-                        let remainder = matched
-                            .strip_prefix(&line_buffer.split_whitespace().last().unwrap_or(""))
-                            .unwrap_or("");
-                        print!("{} ", remainder);
-                        line_buffer += remainder;
-                        line_buffer += " ";
+                let input = if line_buffer.ends_with(" ") {
+                    ""
+                } else {
+                    line_buffer.split_whitespace().last().unwrap_or("")
+                };
+                let input_path = Path::new(input);
+                let parent_dir = if input.ends_with("/") {
+                    input_path
+                } else {
+                    input_path.parent().unwrap_or(Path::new(""))
+                };
+                let prefix = input_path
+                    .strip_prefix(parent_dir)
+                    .unwrap_or(Path::new(""))
+                    .to_str()
+                    .unwrap_or_default()
+                    .to_lowercase();
+
+                let mut matches = vec![];
+                if let Ok(mut file_names) = get_dir_children(parent_dir) {
+                    file_names.sort();
+                    file_names
+                        .iter()
+                        .filter(|s| s.starts_with(&prefix))
+                        .for_each(|s| matches.push(s.clone()));
+                }
+                match matches.as_slice() {
+                    [] => {
+                        print!("\x07");
                         io::stdout().flush()?;
+                    }
+                    [m] => {
+                        let remainder = m.strip_prefix(&prefix).unwrap_or("");
+                        line_buffer += remainder;
+                        print!("{}", remainder);
+                        io::stdout().flush()?;
+                    }
+                    _ => {
+                        if tab_count == 0 {
+                            let lcp = longest_common_prefix(
+                                &matches
+                                    .iter()
+                                    .map(|s| s.as_str().trim_end_matches('/'))
+                                    .collect(),
+                            );
+                            if lcp.len() > prefix.len() {
+                                let remainder = lcp.strip_prefix(&prefix).unwrap_or(" ");
+                                line_buffer += remainder;
+                                print!("{}", remainder);
+                            } else {
+                                tab_count += 1;
+                                print!("\x07");
+                            }
+                            io::stdout().flush()?;
+                        } else {
+                            print!("\n\r");
+                            matches.iter().for_each(|s| print!("{}  ", s));
+                            print!("\n\r$ {}", line_buffer);
+                            io::stdout().flush()?;
+                            tab_count = 0;
+                        }
                     }
                 }
             }
