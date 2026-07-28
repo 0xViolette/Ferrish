@@ -8,12 +8,52 @@ use std::{
 use crossterm;
 use is_executable;
 
+struct CommandPipeline {
+    commands: Vec<Command>,
+}
+
+struct Builtin {
+    name: &'static str,
+    handler: fn(&[&str]) -> Result<(), String>,
+}
+
+static BUILTINS: [Builtin; 5] = [
+    Builtin {
+        name: "exit",
+        handler: handle_exit,
+    },
+    Builtin {
+        name: "echo",
+        handler: handle_echo,
+    },
+    Builtin {
+        name: "pwd",
+        handler: handle_pwd,
+    },
+    Builtin {
+        name: "cd",
+        handler: handle_cd,
+    },
+    Builtin {
+        name: "type",
+        handler: handle_type,
+    },
+];
+
+fn cleanup() {
+    if matches!(crossterm::terminal::is_raw_mode_enabled(), Ok(true)) {
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
+}
+
+fn handle_exit(_: &[&str]) -> Result<(), String> {
+    cleanup();
+
+    process::exit(0);
+}
+
 enum Command {
-    Exit,
-    Echo,
-    Pwd,
-    Cd,
-    Type,
+    Builtin(&'static Builtin),
     Executable(PathBuf),
 }
 
@@ -22,11 +62,11 @@ struct ParsedInput<'a> {
     arguments: Vec<&'a str>,
 }
 
-fn check_prefix(v: &Vec<&str>, p: &str) -> bool {
+fn check_prefix(v: &[&str], p: &str) -> bool {
     v.iter().all(|s| s.starts_with(p))
 }
 
-fn longest_common_prefix(v: &Vec<&str>) -> String {
+fn longest_common_prefix(v: &[&str]) -> String {
     let mut pivot = String::new();
     for c in v[0].chars() {
         if !check_prefix(v, &pivot) {
@@ -55,20 +95,11 @@ fn check_executable(s: &str) -> Option<PathBuf> {
 }
 
 fn parse_command(s: &str) -> Option<Command> {
-    match s {
-        "exit" => Some(Command::Exit),
-        "echo" => Some(Command::Echo),
-        "type" => Some(Command::Type),
-        "pwd" => Some(Command::Pwd),
-        "cd" => Some(Command::Cd),
-        _ => {
-            if let Some(full_path) = check_executable(s) {
-                Some(Command::Executable(full_path))
-            } else {
-                None
-            }
-        }
-    }
+    BUILTINS
+        .iter()
+        .find(|b| b.name == s)
+        .map(Command::Builtin)
+        .or_else(|| check_executable(s).map(Command::Executable))
 }
 
 fn parse(input: &str) -> Result<ParsedInput<'_>, String> {
@@ -84,11 +115,12 @@ fn parse(input: &str) -> Result<ParsedInput<'_>, String> {
     })
 }
 
-fn handle_echo<'a>(arguments: Vec<&'_ str>) {
+fn handle_echo(arguments: &[&str]) -> Result<(), String> {
     println!("{}", arguments.join(" "));
+    Ok(())
 }
 
-fn handle_type(arguments: Vec<&str>) {
+fn handle_type(arguments: &[&str]) -> Result<(), String> {
     for arg in arguments.iter() {
         if let Some(cmd) = parse_command(arg) {
             match cmd {
@@ -99,13 +131,15 @@ fn handle_type(arguments: Vec<&str>) {
             println!("{arg}: not found");
         }
     }
+
+    Ok(())
 }
 
 fn handle_executable(executable_path: &Path, args: &[&str]) {
     process::Command::new(executable_path.file_name().unwrap())
         .args(args)
         .status()
-        .expect("process failed to execute");
+        .expect("Couldn't execute command");
 }
 
 fn handle_cd(args: &[&str]) -> Result<(), String> {
@@ -122,14 +156,26 @@ fn handle_cd(args: &[&str]) -> Result<(), String> {
     }
 }
 
-fn run(input: ParsedInput) {
+fn handle_pwd(args: &[&str]) -> Result<(), String> {
+    if !args.is_empty() {
+        return Err("pwd: too many arguments".to_string());
+    }
+    println!(
+        "{}",
+        std::env::current_dir()
+            .map_err(|e| e.to_string())?
+            .display()
+    );
+    Ok(())
+}
+
+fn run(input: ParsedInput) -> Result<(), String> {
     match input.command {
-        Command::Exit => process::exit(0),
-        Command::Echo => handle_echo(input.arguments),
-        Command::Type => handle_type(input.arguments),
-        Command::Pwd => println!("{}", std::env::current_dir().unwrap().display()),
-        Command::Cd => handle_cd(&input.arguments).unwrap_or_else(|e| eprintln!("{e}")),
-        Command::Executable(cmd) => handle_executable(&cmd, &input.arguments),
+        Command::Builtin(b) => (b.handler)(&input.arguments),
+        Command::Executable(cmd) => {
+            handle_executable(&cmd, &input.arguments);
+            return Ok(());
+        }
     }
 }
 
@@ -172,9 +218,11 @@ fn read_loop() -> std::io::Result<()> {
             .modifiers
             .contains(crossterm::event::KeyModifiers::CONTROL)
         {
-            if event.code == crossterm::event::KeyCode::Char('c')
-                || event.code == crossterm::event::KeyCode::Char('d')
-            {
+            if event.code == crossterm::event::KeyCode::Char('c') {
+                print!("\r\n$ ");
+                line_buffer.clear();
+                io::stdout().flush()?;
+            } else if event.code == crossterm::event::KeyCode::Char('d') {
                 break;
             }
         }
@@ -199,11 +247,8 @@ fn read_loop() -> std::io::Result<()> {
             println!(); // Move cursor to the next line
 
             if !line_buffer.trim().is_empty() {
-                match parse(&line_buffer) {
-                    Ok(parsed) => run(parsed),
-                    Err(e) => {
-                        eprintln!("{e}");
-                    }
+                if let Err(e) = parse(&line_buffer).and_then(run) {
+                    eprintln!("{e}");
                 }
             }
 
@@ -258,8 +303,8 @@ fn read_loop() -> std::io::Result<()> {
                             let lcp = longest_common_prefix(
                                 &matches
                                     .iter()
-                                    .map(|s| s.as_str().trim_end_matches('/'))
-                                    .collect(),
+                                    .map(|s| s.trim_end_matches('/').trim())
+                                    .collect::<Vec<&str>>(),
                             );
                             if lcp.len() > prefix.len() {
                                 let remainder = lcp.strip_prefix(&prefix).unwrap_or(" ");
