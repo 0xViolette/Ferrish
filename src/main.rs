@@ -8,13 +8,9 @@ use std::{
 use crossterm;
 use is_executable;
 
-struct CommandPipeline {
-    commands: Vec<Command>,
-}
-
 struct Builtin {
     name: &'static str,
-    handler: fn(&[&str]) -> Result<(), String>,
+    handler: fn(&[&str]) -> Result<Option<String>, String>,
 }
 
 static BUILTINS: [Builtin; 5] = [
@@ -46,20 +42,103 @@ fn cleanup() {
     }
 }
 
-fn handle_exit(_: &[&str]) -> Result<(), String> {
+fn handle_exit(_: &[&str]) -> Result<Option<String>, String> {
     cleanup();
 
     process::exit(0);
 }
 
-enum Command {
+enum Program {
     Builtin(&'static Builtin),
-    Executable(PathBuf),
+    External(PathBuf),
 }
 
-struct ParsedInput<'a> {
-    command: Command,
-    arguments: Vec<&'a str>,
+struct ParsedCommand<'a> {
+    program: Program,
+    args: Vec<&'a str>,
+}
+
+fn run_pipeline(pipeline: Vec<ParsedCommand>) -> Result<(), String> {
+    enum PipelineOutput {
+        Process(process::ChildStdout),
+        Builtin(String),
+    }
+
+    let mut previous_out: Option<PipelineOutput> = None;
+    let mut children = Vec::new();
+
+    for (i, command) in pipeline.iter().enumerate() {
+        let is_last = i == pipeline.len() - 1;
+
+        match &command.program {
+            Program::External(path) => {
+                let mut proc = std::process::Command::new(path.file_name().unwrap());
+                proc.args(&command.args);
+
+                match previous_out.take() {
+                    Some(PipelineOutput::Process(stdout)) => {
+                        proc.stdin(stdout);
+                    }
+                    Some(PipelineOutput::Builtin(s)) => {
+                        proc.stdin(process::Stdio::piped());
+
+                        let mut child = proc.spawn().unwrap();
+
+                        use std::io::Write;
+                        child
+                            .stdin
+                            .as_mut()
+                            .unwrap()
+                            .write_all(s.as_bytes())
+                            .unwrap();
+
+                        // Close stdin so the child sees EOF.
+                        drop(child.stdin.take());
+
+                        if !is_last {
+                            previous_out = child.stdout.take().map(PipelineOutput::Process);
+                        }
+
+                        children.push(child);
+                        continue; // We've already spawned this child.
+                    }
+                    None => {}
+                }
+
+                if !is_last {
+                    proc.stdout(std::process::Stdio::piped());
+                }
+
+                let mut child = proc.spawn().unwrap();
+
+                if !is_last {
+                    previous_out = child.stdout.take().map(PipelineOutput::Process);
+                }
+
+                children.push(child);
+            }
+            Program::Builtin(b) => {
+                let result = (b.handler)(&command.args);
+                match result {
+                    Err(e) => eprintln!("{}", e.to_string()),
+                    Ok(None) => {}
+                    Ok(Some(s)) => {
+                        if is_last {
+                            println!("{s}");
+                        } else {
+                            previous_out = Some(PipelineOutput::Builtin(s + "\n"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for mut child in children {
+        child.wait().unwrap();
+    }
+
+    Ok(())
 }
 
 fn check_prefix(v: &[&str], p: &str) -> bool {
@@ -86,7 +165,7 @@ fn longest_common_prefix(v: &[&str]) -> String {
     }
 }
 
-fn check_executable(s: &str) -> Option<PathBuf> {
+fn find_in_path(s: &str) -> Option<PathBuf> {
     let path = env::var_os("PATH").expect("PATH not set");
 
     env::split_paths(&path)
@@ -94,89 +173,97 @@ fn check_executable(s: &str) -> Option<PathBuf> {
         .find(|path| is_executable::is_executable(path))
 }
 
-fn parse_command(s: &str) -> Option<Command> {
+fn resolve_program(s: &str) -> Option<Program> {
     BUILTINS
         .iter()
         .find(|b| b.name == s)
-        .map(Command::Builtin)
-        .or_else(|| check_executable(s).map(Command::Executable))
+        .map(Program::Builtin)
+        .or_else(|| find_in_path(s).map(Program::External))
 }
 
-fn parse(input: &str) -> Result<ParsedInput<'_>, String> {
+fn parse(input: &str) -> Result<ParsedCommand<'_>, String> {
     let mut parts = input.split_whitespace();
     let cmd_string = parts.next().unwrap();
 
-    let command = parse_command(cmd_string)
+    let command = resolve_program(cmd_string)
         .ok_or_else(|| format!("{cmd_string}: command not found").to_string())?;
 
-    Ok(ParsedInput {
-        command,
-        arguments: parts.collect(),
+    Ok(ParsedCommand {
+        program: command,
+        args: parts
+            .map(|args| args.trim_matches(|c| c == '"' || c == '\''))
+            .collect(),
     })
 }
 
-fn handle_echo(arguments: &[&str]) -> Result<(), String> {
-    println!("{}", arguments.join(" "));
-    Ok(())
+fn parse_pipeline(input: &str) -> Result<Vec<ParsedCommand<'_>>, String> {
+    let parts = input.split("|");
+
+    let mut cmds = vec![];
+
+    for part in parts {
+        let cmd = parse(part.trim())?;
+        cmds.push(cmd);
+    }
+    return Ok(cmds);
 }
 
-fn handle_type(arguments: &[&str]) -> Result<(), String> {
+fn handle_echo(arguments: &[&str]) -> Result<Option<String>, String> {
+    Ok(Some(format!("{}", arguments.join(" "))))
+}
+
+fn handle_type(arguments: &[&str]) -> Result<Option<String>, String> {
+    let mut v: Vec<String> = Vec::new();
     for arg in arguments.iter() {
-        if let Some(cmd) = parse_command(arg) {
+        if let Some(cmd) = resolve_program(arg) {
             match cmd {
-                Command::Executable(path) => println!("{arg} is {}", path.display()),
-                _ => println!("{arg} is a shell builtin"),
+                Program::External(path) => v.push(format!("{arg} is {}", path.display())),
+                _ => v.push(format!("{arg} is a shell builtin")),
             }
         } else {
-            println!("{arg}: not found");
-        }
+            v.push(format!("{arg}: not found"));
+        };
     }
 
-    Ok(())
+    Ok(Some(v.join("\n")))
 }
 
-fn handle_executable(executable_path: &Path, args: &[&str]) {
-    process::Command::new(executable_path.file_name().unwrap())
-        .args(args)
-        .status()
-        .expect("Couldn't execute command");
-}
-
-fn handle_cd(args: &[&str]) -> Result<(), String> {
+fn handle_cd(args: &[&str]) -> Result<Option<String>, String> {
     match args {
-        [] | ["~"] => std::env::home_dir()
-            .ok_or_else(|| "Cannot find your home directory".to_string())
-            .and_then(|home| std::env::set_current_dir(home).map_err(|e| e.to_string())),
-        [dir] => std::env::set_current_dir(dir).map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => format!("cd: {dir}: No such file or directory"),
-            std::io::ErrorKind::PermissionDenied => format!("cd: {dir}: Permission denied"),
-            _ => format!("cd: {dir}: {}", e.to_string()),
-        }),
+        [] | ["~"] => {
+            if let Err(e) = std::env::home_dir()
+                .ok_or_else(|| "Cannot find your home directory".to_string())
+                .and_then(|home| std::env::set_current_dir(home).map_err(|e| e.to_string()))
+            {
+                return Err(e);
+            }
+            Ok(None)
+        }
+
+        [dir] => {
+            if let Err(e) = std::env::set_current_dir(dir).map_err(|e| match e.kind() {
+                std::io::ErrorKind::NotFound => format!("cd: {dir}: No such file or directory"),
+                std::io::ErrorKind::PermissionDenied => format!("cd: {dir}: Permission denied"),
+                _ => format!("cd: {dir}: {}", e.to_string()),
+            }) {
+                return Err(e);
+            }
+            Ok(None)
+        }
         [_, _, ..] => Err("cd: too many arguments".to_string()),
     }
 }
 
-fn handle_pwd(args: &[&str]) -> Result<(), String> {
+fn handle_pwd(args: &[&str]) -> Result<Option<String>, String> {
     if !args.is_empty() {
         return Err("pwd: too many arguments".to_string());
     }
-    println!(
-        "{}",
+    Ok(Some(
         std::env::current_dir()
             .map_err(|e| e.to_string())?
             .display()
-    );
-    Ok(())
-}
-
-fn run(input: ParsedInput) -> Result<(), String> {
-    match input.command {
-        Command::Builtin(b) => (b.handler)(&input.arguments),
-        Command::Executable(cmd) => {
-            handle_executable(&cmd, &input.arguments);
-            return Ok(());
-        }
-    }
+            .to_string(),
+    ))
 }
 
 fn get_dir_children(path: &Path) -> std::io::Result<Vec<String>> {
@@ -247,7 +334,7 @@ fn read_loop() -> std::io::Result<()> {
             println!(); // Move cursor to the next line
 
             if !line_buffer.trim().is_empty() {
-                if let Err(e) = parse(&line_buffer).and_then(run) {
+                if let Err(e) = parse_pipeline(&line_buffer).and_then(run_pipeline) {
                     eprintln!("{e}");
                 }
             }
