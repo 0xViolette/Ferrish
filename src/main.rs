@@ -72,7 +72,12 @@ fn run_pipeline(pipeline: Vec<ParsedCommand>) -> Result<(), String> {
 
         match &command.program {
             Program::External(path) => {
-                let mut proc = std::process::Command::new(path.file_name().unwrap());
+                let program_name = path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .ok_or_else(|| format!("invalid program path: {}", path.display()))?;
+
+                let mut proc = std::process::Command::new(program_name);
                 proc.args(&command.args);
 
                 match previous_out.take() {
@@ -82,15 +87,18 @@ fn run_pipeline(pipeline: Vec<ParsedCommand>) -> Result<(), String> {
                     Some(PipelineOutput::Builtin(s)) => {
                         proc.stdin(process::Stdio::piped());
 
-                        let mut child = proc.spawn().unwrap();
+                        let mut child = proc
+                            .spawn()
+                            .map_err(|e| format!("{}: {}", path.display(), e))?;
 
-                        use std::io::Write;
-                        child
+                        let stdin = child
                             .stdin
                             .as_mut()
-                            .unwrap()
-                            .write_all(s.as_bytes())
-                            .unwrap();
+                            .ok_or_else(|| format!("{}: failed to open stdin", path.display()))?;
+
+                        stdin.write_all(s.as_bytes()).map_err(|e| {
+                            format!("{}: stdin write failed: {}", path.display(), e)
+                        })?;
 
                         // Close stdin so the child sees EOF.
                         drop(child.stdin.take());
@@ -109,7 +117,9 @@ fn run_pipeline(pipeline: Vec<ParsedCommand>) -> Result<(), String> {
                     proc.stdout(std::process::Stdio::piped());
                 }
 
-                let mut child = proc.spawn().unwrap();
+                let mut child = proc
+                    .spawn()
+                    .map_err(|e| format!("{}: {}", path.display(), e))?;
 
                 if !is_last {
                     previous_out = child.stdout.take().map(PipelineOutput::Process);
@@ -118,7 +128,7 @@ fn run_pipeline(pipeline: Vec<ParsedCommand>) -> Result<(), String> {
                 children.push(child);
             }
             Program::Builtin(b) => {
-                let result = (b.handler)(&command.args);
+                let result = (b.handler)(&command.args).map_err(|e| format!("{}: {}", b.name, e));
                 match result {
                     Err(e) => eprintln!("{}", e.to_string()),
                     Ok(None) => {}
@@ -135,7 +145,9 @@ fn run_pipeline(pipeline: Vec<ParsedCommand>) -> Result<(), String> {
     }
 
     for mut child in children {
-        child.wait().unwrap();
+        let _ = child
+            .wait()
+            .map_err(|e| format!("child wait failed: {}", e))?;
     }
 
     Ok(())
